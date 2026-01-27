@@ -1,0 +1,69 @@
+{
+  "name": "tawf-ai",
+  "version": "1.0.0",
+  "description": "AI-based pre-screening system for Sharia/Fatwa decisions",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:seed": "tsx scripts/seed.ts",
+    "db:reset": "prisma migrate reset",
+    "db:push": "prisma db push",
+    "scrape": "tsx scripts/scrape.ts",
+    "embed": "tsx scripts/embed.ts",
+    "test": "vitest",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:e2e": "vitest run tests/e2e",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "islam",
+    "fatwa",
+    "sharia",
+    "ai",
+    "semantic-search",
+    "rag",
+    "pre-screening"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@fastify/rate-limit": "^9.1.0",
+    "@prisma/client": "^5.22.0",
+    "@prisma/extension-pulse": "^1.2.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.2.0",
+    "ollama": "^0.5.1",
+    "openai": "^4.73.0",
+    "pino": "^9.6.0",
+    "pino-pretty": "^11.3.0",
+    "playwright": "^1.49.1",
+    "playwright-extra": "^4.3.6",
+    "cheerio": "^1.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@typescript-eslint/eslint-plugin": "^8.18.1",
+    "@typescript-eslint/parser": "^8.18.1",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "prettier": "^3.4.2",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

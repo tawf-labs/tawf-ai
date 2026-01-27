@@ -1,0 +1,156 @@
+// Tawf-AI Database Schema
+// PostgreSQL with pgvector extension
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+// Paper represents a scraped scholarly paper/fatwa
+model Paper {
+  id         String   @id @default(cuid())
+  title      String
+  content    String   @db.Text
+  source     String   // islamqa, darulifta, etc.
+  url        String   @unique
+  author     String?
+  fatwaNumber String?
+  publishedAt DateTime?
+  language   String   @default("en")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  chunks     PaperChunk[]
+  citations  ScreeningCitation[]
+
+  @@index([source])
+  @@index([publishedAt])
+  @@index([createdAt])
+}
+
+// PaperChunk stores chunks of papers with vector embeddings
+model PaperChunk {
+  id        String   @id @default(cuid())
+  paperId   String
+  paper     Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  content   String   @db.Text
+  chunkIndex Int     // Order within the paper
+  embedding Unsupported("vector(1536)")?
+  metadata  Json?    // Additional metadata
+  createdAt DateTime @default(now())
+
+  @@index([paperId])
+  @@index([chunkIndex])
+}
+
+// Conversation represents a chat session
+model Conversation {
+  id        String    @id @default(cuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+}
+
+// Message represents a single message in a conversation
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  content        String       @db.Text
+  citations      Json?        // Array of citation objects
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId])
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+// ScreeningRequest represents a proposal pre-screening request
+model ScreeningRequest {
+  id         String            @id @default(cuid())
+  title      String
+  abstract   String            @db.Text
+  keywords   String[]
+  category   String?
+  language   String            @default("en")
+  status     ScreeningStatus   @default(PENDING)
+  result     ScreeningResult?
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@index([status])
+  @@index([category])
+}
+
+// ScreeningResult stores the outcome of a screening
+model ScreeningResult {
+  id            String            @id @default(cuid())
+  requestId     String            @unique
+  request       ScreeningRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  summary       String            @db.Text
+  recommendation ScreeningRecommendation
+  confidence    Float
+  concerns      String[]
+  suggestions   String[]
+  completedAt   DateTime?
+  createdAt     DateTime          @default(now())
+
+  citations     ScreeningCitation[]
+}
+
+enum ScreeningStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ScreeningRecommendation {
+  APPROVED
+  CONDITIONALLY_APPROVED
+  NEEDS_REVIEW
+  REJECTED
+}
+
+// ScreeningCitation links papers to screening results
+model ScreeningCitation {
+  id         String           @id @default(cuid())
+  resultId   String
+  result     ScreeningResult  @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  paperId    String
+  paper      Paper            @relation(fields: [paperId], references: [id], onDelete: Cascade)
+  excerpt    String           @db.Text
+  relevance  Float
+  createdAt  DateTime         @default(now())
+
+  @@index([resultId])
+  @@index([paperId])
+}
+
+// ScrapeJob tracks scraping operations
+model ScrapeJob {
+  id          String      @id @default(cuid())
+  source      String
+  status      JobStatus   @default(RUNNING)
+  papersFound Int         @default(0)
+  papersStored Int        @default(0)
+  error       String?
+  startedAt   DateTime    @default(now())
+  completedAt DateTime?
+}
+
+enum JobStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}

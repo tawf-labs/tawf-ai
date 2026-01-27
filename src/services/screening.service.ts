@@ -1,0 +1,162 @@
+import { prisma } from '../db/client.js';
+import { aiService } from '../ai/index.js';
+import type {
+  CreateScreeningRequest,
+  ScreeningResponse,
+  ScreeningResult as ScreeningResultType,
+} from '../types/screening.js';
+
+export class ScreeningService {
+  /**
+   * Submit a proposal for pre-screening
+   */
+  async submitProposal(
+    data: CreateScreeningRequest
+  ): Promise<ScreeningResponse> {
+    const request = await prisma.screeningRequest.create({
+      data: {
+        title: data.title,
+        abstract: data.abstract,
+        keywords: data.keywords || [],
+        category: data.category,
+        status: 'PROCESSING',
+      },
+    });
+
+    // Process screening asynchronously (in production, use a job queue)
+    this.processScreening(request.id).catch((error) => {
+      console.error(`Screening processing failed for ${request.id}:`, error);
+    });
+
+    return {
+      id: request.id,
+      status: 'PROCESSING',
+      estimatedTime: 30, // seconds
+    };
+  }
+
+  /**
+   * Process screening request
+   */
+  private async processScreening(requestId: string) {
+    const request = await prisma.screeningRequest.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!request) {
+      throw new Error('Screening request not found');
+    }
+
+    try {
+      const result = await aiService.screenProposal({
+        title: request.title,
+        abstract: request.abstract,
+        keywords: request.keywords,
+        category: request.category ?? undefined,
+      });
+
+      await prisma.screeningResult.create({
+        data: {
+          requestId: request.id,
+          summary: result.summary,
+          recommendation: result.recommendation,
+          confidence: result.confidence,
+          concerns: result.concerns,
+          suggestions: result.suggestions,
+          citations: {
+            create: result.citations.map((c) => ({
+              paperId: c.paperId,
+              excerpt: c.excerpt ?? '',
+              relevance: c.relevance,
+            })),
+          },
+          completedAt: new Date(),
+        },
+      });
+
+      await prisma.screeningRequest.update({
+        where: { id: requestId },
+        data: { status: 'COMPLETED' },
+      });
+    } catch (error) {
+      await prisma.screeningRequest.update({
+        where: { id: requestId },
+        data: { status: 'FAILED' },
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Get screening result
+   */
+  async getResult(id: string): Promise<ScreeningResultType | null> {
+    const request = await prisma.screeningRequest.findUnique({
+      where: { id },
+      include: {
+        result: {
+          include: {
+            citations: {
+              include: {
+                paper: {
+                  select: {
+                    id: true,
+                    title: true,
+                    source: true,
+                    url: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!request) {
+      return null;
+    }
+
+    if (!request.result) {
+      return {
+        id: '',
+        requestId: request.id,
+        summary: '',
+        recommendation: 'NEEDS_REVIEW',
+        confidence: 0,
+        concerns: [],
+        suggestions: [],
+        createdAt: request.createdAt,
+        citations: [],
+      };
+    }
+
+    return {
+      id: request.result.id,
+      requestId: request.id,
+      summary: request.result.summary,
+      recommendation: request.result.recommendation as any,
+      confidence: request.result.confidence,
+      concerns: request.result.concerns,
+      suggestions: request.result.suggestions,
+      createdAt: request.result.createdAt,
+      citations: request.result.citations.map((c) => ({
+        id: c.id,
+        paperId: c.paperId,
+        excerpt: c.excerpt,
+        relevance: c.relevance,
+        paper: c.paper as any,
+      })),
+    };
+  }
+
+  /**
+   * Submit feedback on screening result
+   */
+  async submitFeedback(_id: string, _feedback: { helpful: boolean; comments?: string }) {
+    // In production, store feedback for improving the model
+    return { message: 'Feedback recorded' };
+  }
+}
+
+export const screeningService = new ScreeningService();
