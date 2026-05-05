@@ -484,7 +484,9 @@ docker-compose -f docker-compose.prod.yml up -d
 
 ## License
 
-MIT License - see LICENSE file for details.
+Apache License 2.0 - see LICENSE file for details.
+
+Copyright 2026 Tawf Labs
 
 ## Disclaimer
 
