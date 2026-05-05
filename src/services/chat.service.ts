@@ -1,4 +1,4 @@
-import { prisma } from '../db/client.js';
+import { supabase } from '../db/client.js';
 import { aiService } from '../ai/index.js';
 import type { ChatRequest, ChatResponse } from '../types/chat.js';
 
@@ -6,65 +6,77 @@ export class ChatService {
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const { message, conversationId } = request;
 
-    const conversation = conversationId
-      ? (await prisma.conversation.findUnique({ where: { id: conversationId } })) ??
-        (await prisma.conversation.create({ data: {} }))
-      : await prisma.conversation.create({ data: {} });
+    let convId = conversationId;
+    if (convId) {
+      const { data } = await supabase.from('Conversation').select('id').eq('id', convId).single();
+      if (!data) convId = undefined;
+    }
+    if (!convId) {
+      const { data, error } = await supabase.from('Conversation').insert({}).select('id').single();
+      if (error) throw error;
+      convId = data!.id;
+    }
 
-    await prisma.message.create({
-      data: { conversationId: conversation.id, role: 'USER', content: message },
-    });
+    const resolvedConvId = convId as string;
 
-    const history = await prisma.message.findMany({
-      where: { conversationId: conversation.id },
-      orderBy: { createdAt: 'asc' },
-      take: 20,
-    });
+    await supabase.from('Message').insert({ conversationId: resolvedConvId, role: 'USER', content: message });
 
-    const { response, citations } = await aiService.generateResponse(message, history);
+    const { data: history } = await supabase
+      .from('Message')
+      .select('*')
+      .eq('conversationId', resolvedConvId)
+      .order('createdAt', { ascending: true })
+      .limit(20);
 
-    const assistantMessage = await prisma.message.create({
-      data: {
-        conversationId: conversation.id,
-        role: 'ASSISTANT',
-        content: response,
-        citations: citations as any,
-      },
-    });
+    const { response, citations } = await aiService.generateResponse(message, history ?? []);
+
+    const { data: assistantMessage, error } = await supabase
+      .from('Message')
+      .insert({ conversationId: resolvedConvId, role: 'ASSISTANT', content: response, citations })
+      .select('id')
+      .single();
+    if (error) throw error;
 
     return {
-      conversationId: conversation.id,
+      conversationId: resolvedConvId,
       messageId: assistantMessage.id,
       response,
       citations,
-      sources: citations.map((c) => c.url).filter(Boolean),
+      sources: citations.map((c: any) => c.url).filter(Boolean),
     };
   }
 
   async listConversations(options: { page: number; limit: number }) {
     const { page, limit } = options;
-    const skip = (page - 1) * limit;
-    const [conversations, total] = await Promise.all([
-      prisma.conversation.findMany({
-        skip,
-        take: limit,
-        orderBy: { updatedAt: 'desc' },
-        include: { messages: { take: 1, orderBy: { createdAt: 'desc' } } },
-      }),
-      prisma.conversation.count(),
-    ]);
-    return { data: conversations, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+    const from = (page - 1) * limit;
+
+    const { data, count, error } = await supabase
+      .from('Conversation')
+      .select('*, messages:Message(content,role,createdAt)', { count: 'exact' })
+      .order('updatedAt', { ascending: false })
+      .limit(1, { referencedTable: 'Message' })
+      .range(from, from + limit - 1);    if (error) throw error;
+
+    return {
+      data: data ?? [],
+      pagination: { page, limit, total: count ?? 0, totalPages: Math.ceil((count ?? 0) / limit) },
+    };
   }
 
   async getConversation(id: string) {
-    return prisma.conversation.findUnique({
-      where: { id },
-      include: { messages: { orderBy: { createdAt: 'asc' } } },
-    });
+    const { data, error } = await supabase
+      .from('Conversation')
+      .select('*, messages:Message(*)')
+      .eq('id', id)
+      .order('createdAt', { referencedTable: 'Message', ascending: true })
+      .single();
+    if (error) throw error;
+    return data;
   }
 
   async deleteConversation(id: string) {
-    return prisma.conversation.delete({ where: { id } });
+    const { error } = await supabase.from('Conversation').delete().eq('id', id);
+    if (error) throw error;
   }
 }
 

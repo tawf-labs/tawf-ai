@@ -1,111 +1,51 @@
-import { prisma, findSimilarPapers } from '../db/client.js';
+import { supabase } from '../db/client.js';
 import type { Paper, PaperSearchResult } from '../types/paper.js';
 
 export class PaperService {
-  /**
-   * Get paginated list of papers
-   */
-  async listPapers(options: {
-    page: number;
-    limit: number;
-    source?: string;
-    search?: string;
-  }) {
+  async listPapers(options: { page: number; limit: number; source?: string; search?: string }) {
     const { page, limit, source, search } = options;
-    const skip = (page - 1) * limit;
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
 
-    const where = {
-      ...(source && { source }),
-      ...(search && {
-        OR: [
-          { title: { contains: search, mode: 'insensitive' as const } },
-          { content: { contains: search, mode: 'insensitive' as const } },
-        ],
-      }),
-    };
+    let query = supabase.from('Paper').select('id,title,source,url,author,publishedAt,createdAt', { count: 'exact' });
+    if (source) query = query.eq('source', source);
+    if (search) query = query.or(`title.ilike.%${search}%,content.ilike.%${search}%`);
 
-    const [papers, total] = await Promise.all([
-      prisma.paper.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: 'desc' },
-        select: {
-          id: true,
-          title: true,
-          source: true,
-          url: true,
-          author: true,
-          publishedAt: true,
-          createdAt: true,
-        },
-      }),
-      prisma.paper.count({ where }),
-    ]);
+    const { data, count, error } = await query.order('createdAt', { ascending: false }).range(from, to);
+    if (error) throw error;
 
     return {
-      data: papers,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+      data: data ?? [],
+      pagination: { page, limit, total: count ?? 0, totalPages: Math.ceil((count ?? 0) / limit) },
     };
   }
 
-  /**
-   * Get paper by ID
-   */
   async getPaper(id: string) {
-    return prisma.paper.findUnique({
-      where: { id },
-      include: {
-        chunks: {
-          orderBy: { chunkIndex: 'asc' },
-          take: 5,
-        },
-      },
-    });
+    const { data, error } = await supabase
+      .from('Paper')
+      .select('*, chunks:PaperChunk(id,content,chunkIndex)')
+      .eq('id', id)
+      .order('chunkIndex', { referencedTable: 'PaperChunk', ascending: true })
+      .limit(5, { referencedTable: 'PaperChunk' })
+      .single();
+    if (error) throw error;
+    return data;
   }
 
-  /**
-   * Semantic search using vector embeddings
-   */
-  async searchPapers(queryEmbedding: number[], limit: number, threshold: number) {
-    const similarChunks = await findSimilarPapers(queryEmbedding, limit, threshold);
-
-    const paperIds = [...new Set(similarChunks.map((c) => c.id))];
-
-    const chunks = await prisma.paperChunk.findMany({
-      where: { id: { in: paperIds } },
-      include: {
-        paper: {
-          select: {
-            id: true,
-            title: true,
-            source: true,
-            url: true,
-          },
-        },
-      },
+  async searchPapers(queryEmbedding: number[], limit: number, threshold: number): Promise<PaperSearchResult[]> {
+    const { data, error } = await supabase.rpc('match_paper_chunks', {
+      query_embedding: queryEmbedding,
+      match_threshold: threshold,
+      match_count: limit,
     });
-
-    const results: PaperSearchResult[] = chunks.map((chunk) => {
-      const similarityData = similarChunks.find((s) => s.id === chunk.id);
-      return {
-        paper: chunk.paper,
-        similarity: similarityData?.similarity || 0,
-        excerpt: chunk.content.substring(0, 200) + '...',
-      };
-    });
-
-    return results.sort((a, b) => b.similarity - a.similarity);
+    if (error) throw error;
+    return (data ?? []).map((row: any) => ({
+      paper: { id: row.paper_id, title: row.title, source: row.source, url: row.url },
+      similarity: row.similarity,
+      excerpt: row.content.substring(0, 200) + '...',
+    }));
   }
 
-  /**
-   * Create or update a paper
-   */
   async upsertPaper(data: {
     title: string;
     content: string;
@@ -116,42 +56,36 @@ export class PaperService {
     publishedAt?: Date;
     language?: string;
   }) {
-    return prisma.paper.upsert({
-      where: { url: data.url },
-      update: data,
-      create: {
-        ...data,
-        language: data.language || 'en',
-      },
-    });
+    const { data: paper, error } = await supabase
+      .from('Paper')
+      .upsert({ ...data, language: data.language ?? 'en' }, { onConflict: 'url' })
+      .select()
+      .single();
+    if (error) throw error;
+    return paper;
   }
 
-  /**
-   * Delete a paper
-   */
   async deletePaper(id: string) {
-    return prisma.paper.delete({
-      where: { id },
-    });
+    const { error } = await supabase.from('Paper').delete().eq('id', id);
+    if (error) throw error;
   }
 
-  /**
-   * Get statistics
-   */
   async getStats() {
-    const [papersCount, chunksCount, sources] = await Promise.all([
-      prisma.paper.count(),
-      prisma.paperChunk.count(),
-      prisma.paper.groupBy({
-        by: ['source'],
-        _count: true,
-      }),
+    const [{ count: papersCount }, { count: chunksCount }, { data: sources }] = await Promise.all([
+      supabase.from('Paper').select('*', { count: 'exact', head: true }),
+      supabase.from('PaperChunk').select('*', { count: 'exact', head: true }),
+      supabase.from('Paper').select('source'),
     ]);
 
+    const sourceCounts = (sources ?? []).reduce<Record<string, number>>((acc, row) => {
+      acc[row.source] = (acc[row.source] ?? 0) + 1;
+      return acc;
+    }, {});
+
     return {
-      papersIndexed: papersCount,
-      chunksCount,
-      sources: sources.map((s) => ({ source: s.source, count: s._count })),
+      papersIndexed: papersCount ?? 0,
+      chunksCount: chunksCount ?? 0,
+      sources: Object.entries(sourceCounts).map(([source, count]) => ({ source, count })),
     };
   }
 }

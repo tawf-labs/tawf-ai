@@ -2,7 +2,7 @@ import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { getChatGraph } from './chat.graph.js';
 import { getScreeningGraph, parseScreeningOutput } from './screening.graph.js';
 import type { Citation } from '../types/chat.js';
-import type { Message } from '@prisma/client';
+import type { Message } from '../types/chat.js';
 
 export interface ScreenProposalResult {
   summary: string;

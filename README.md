@@ -16,6 +16,7 @@ Tawf-AI helps researchers and institutions pre-screen Islamic fatwa proposals by
 - 🔍 **Semantic Search**: Vector-based search using pgvector
 - 💬 **Conversational API**: Chat interface with source citations
 - 📋 **Proposal Pre-Screening**: Evaluate proposals against scholarly consensus
+- 🤖 **MCP Server**: Connect any MCP-compatible AI agent directly to the fatwa database
 - 🐳 **Docker Support**: Easy local development setup
 - 📊 **PostgreSQL + pgvector**: Efficient vector similarity search
 
@@ -26,32 +27,48 @@ Tawf-AI helps researchers and institutions pre-screen Islamic fatwa proposals by
 │                          Tawf-AI System                         │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                   │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐      │
-│  │  Web Scraper │───▶│  Paper Store │◀───│   Chat API   │      │
-│  │              │    │  (PostgreSQL)│    │              │      │
-│  └──────────────┘    └──────┬───────┘    └──────────────┘      │
-│                              │                                   │
-│                              ▼                                   │
-│                      ┌───────────────┐                          │
-│                      │ Vector Search │                          │
-│                      │   (pgvector)  │                          │
-│                      └───────┬───────┘                          │
-│                              │                                   │
-│                              ▼                                   │
-│                      ┌───────────────┐                          │
-│                      │ AI Service    │                          │
-│                      │ (QWEN/OLLAMA) │                          │
-│                      └───────┬───────┘                          │
-│                              │                                   │
-│              ┌───────────────┼───────────────┐                  │
-│              ▼               ▼               ▼                  │
-│      ┌──────────────┐ ┌──────────────┐ ┌──────────────┐        │
-│      │  Chat API    │ │ Screening    │ │  Search API  │        │
-│      │              │ │    API       │ │              │        │
-│      └──────────────┘ └──────────────┘ └──────────────┘        │
+│  ┌──────────────┐    ┌──────────────────────────────────────┐   │
+│  │  Web Scraper │───▶│             Supabase                 │   │
+│  │  (Playwright)│    │  ┌─────────────┐  ┌───────────────┐ │   │
+│  └──────┬───────┘    │  │  PostgreSQL  │  │   pgvector    │ │   │
+│         │            │  │  (Papers,   │  │  (Embeddings) │ │   │
+│         ▼            │  │  Chats,     │  └───────────────┘ │   │
+│  ┌──────────────┐    │  │  Screening) │                    │   │
+│  │  Auto-Embed  │───▶│  └─────────────┘                    │   │
+│  │  (OpenAI)    │    └──────────────────────────────────────┘   │
+│  └──────────────┘                      │                         │
+│                                        ▼                         │
+│                              ┌───────────────────┐              │
+│                              │    AI Service     │              │
+│                              │  Thaura (LLM)     │              │
+│                              │  LangGraph (RAG)  │              │
+│                              │  Tavily (Search)  │              │
+│                              └─────────┬─────────┘              │
+│                                        │                         │
+│         ┌──────────────────────────────┼──────────────┐         │
+│         ▼                              ▼              ▼         │
+│ ┌──────────────┐             ┌──────────────┐ ┌──────────────┐ │
+│ │  MCP Server  │             │ Screening    │ │  Papers API  │ │
+│ │  /mcp (SSE)  │             │    API       │ │ (Search/List)│ │
+│ └──────┬───────┘             └──────────────┘ └──────────────┘ │
+│        │                                                         │
+│        ▼                              ▼                          │
+│ ┌──────────────┐             ┌──────────────┐                   │
+│ │  AI Agents   │             │   Chat API   │                   │
+│ │ Claude/Cursor│             │              │                   │
+│ └──────────────┘             └──────────────┘                   │
 │                                                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Scraping & Indexing Flow
+
+When a scrape job runs, each paper is automatically:
+1. **Scraped** from the source URL via Playwright + Cheerio
+2. **Saved** to the `Paper` table in Supabase (upserted by URL)
+3. **Chunked & embedded** immediately via OpenAI embeddings into `PaperChunk` with pgvector
+
+This means papers are fully searchable as soon as they are scraped — no separate `npm run embed` step required.
 
 ## Tech Stack
 
@@ -59,10 +76,11 @@ Tawf-AI helps researchers and institutions pre-screen Islamic fatwa proposals by
 |-----------|------------|
 | **Language** | TypeScript (Node.js) |
 | **Framework** | Fastify |
-| **Database** | PostgreSQL + pgvector |
-| **ORM** | Prisma |
-| **AI Model** | QWEN (via Ollama/API) |
-| **Embeddings** | OpenAI / HuggingFace |
+| **Database** | Supabase (PostgreSQL + pgvector) |
+| **AI Model** | Thaura (via API) |
+| **Embeddings** | OpenAI-compatible |
+| **RAG** | LangChain + LangGraph |
+| **Web Search** | Tavily |
 | **Web Scraping** | Playwright + Cheerio |
 | **Container** | Docker + Docker Compose |
 
@@ -71,8 +89,8 @@ Tawf-AI helps researchers and institutions pre-screen Islamic fatwa proposals by
 ### Prerequisites
 
 - Node.js 20+
-- Docker & Docker Compose
-- Ollama (for local AI) or OpenAI API key
+- Docker & Docker Compose (for local PostgreSQL)
+- Supabase project (or self-hosted)
 
 ### Installation
 
@@ -90,25 +108,14 @@ npm install
 3. **Set up environment variables**
 ```bash
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your Supabase credentials and API keys
 ```
 
-4. **Start PostgreSQL**
-```bash
-docker-compose up -d
-```
+4. **Run database migrations**
 
-5. **Run database migrations**
-```bash
-npx prisma migrate dev
-```
+Create the tables and the `match_paper_chunks` vector search function in your Supabase SQL editor. See [Database Schema](#database-schema) below.
 
-6. **Generate Prisma client**
-```bash
-npx prisma generate
-```
-
-7. **Start the development server**
+5. **Start the development server**
 ```bash
 npm run dev
 ```
@@ -122,19 +129,22 @@ The API will be available at `http://localhost:3000`
 PORT=3000
 NODE_ENV=development
 
-# Database
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/tawfai?schema=public"
+# Database (Supabase)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/tawfai"
 
 # AI Service
-AI_PROVIDER=ollama  # ollama | openai | qwen
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:14b
-OPENAI_API_KEY=your_openai_api_key
+THAURA_API_KEY=your_thaura_api_key
+THAURA_BASE_URL=https://backend.thaura.ai/v1
 
-# Embeddings
-EMBEDDING_PROVIDER=ollama  # ollama | openai | huggingface
-EMBEDDING_MODEL=nomic-embed-text
-HUGGINGFACE_API_KEY=your_huggingface_api_key
+# Embeddings (OpenAI-compatible)
+EMBEDDINGS_API_KEY=your_openai_api_key
+EMBEDDINGS_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
+
+# Web Search
+TAVILY_API_KEY=your_tavily_api_key
 
 # Scraper
 SCRAPER_USER_AGENT=Tawf-AI/1.0
@@ -142,6 +152,7 @@ SCRAPER_CONCURRENCY=3
 SCRAPER_DELAY_MS=1000
 
 # API Keys (optional)
+API_KEY_ENABLED=false
 API_KEY=your_api_key_here
 ```
 
@@ -326,6 +337,40 @@ Get screening result.
 #### `POST /api/v1/screening/:id/feedback`
 Provide feedback on screening results (for improvement).
 
+### MCP Server
+
+Tawf-AI exposes an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server at `/mcp`, allowing any MCP-compatible AI agent (Claude Desktop, Cursor, Copilot, etc.) to query the fatwa database directly as a tool.
+
+#### Connect via MCP
+
+```bash
+# Claude Desktop — add to claude_desktop_config.json
+{
+  "mcpServers": {
+    "tawf-ai": {
+      "url": "http://localhost:3000/mcp"
+    }
+  }
+}
+```
+
+#### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `search_fatwa` | Semantic vector search over all indexed papers. Takes `query` (string) and optional `limit` (1–20). |
+| `get_paper` | Fetch full paper details by `id`. |
+| `list_papers` | Paginated list with optional `source` and `search` filters. |
+
+#### Example (via REST for testing)
+
+```bash
+# Semantic search
+curl -X POST https://your-deployment.com/api/v1/papers/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Is cryptocurrency halal?", "limit": 5}'
+```
+
 ### Scraper
 
 #### `POST /api/v1/scrape/trigger`
@@ -364,76 +409,118 @@ Get scraping status.
 
 ## Database Schema
 
-### Core Models
+### Core Tables
 
-```prisma
-model Paper {
-  id          String   @id @default(cuid())
-  title       String
-  content     String   @db.Text
-  source      String
-  url         String   @unique
-  author      String?
-  publishedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  chunks      PaperChunk[]
-}
+```sql
+-- Papers and chunks
+create table "Paper" (
+  id text primary key default gen_random_uuid()::text,
+  title text not null,
+  content text not null,
+  source text not null,
+  url text unique not null,
+  author text,
+  "fatwaNumber" text,
+  "publishedAt" timestamptz,
+  language text default 'en',
+  "createdAt" timestamptz default now(),
+  "updatedAt" timestamptz default now()
+);
 
-model PaperChunk {
-  id         String   @id @default(cuid())
-  paperId    String
-  paper      Paper    @relation(fields: [paperId], references: [id], onDelete: Cascade)
-  content    String   @db.Text
-  embedding  Unsupported("vector(1536)")?
-  createdAt  DateTime @default(now())
+create table "PaperChunk" (
+  id text primary key default gen_random_uuid()::text,
+  "paperId" text references "Paper"(id) on delete cascade,
+  content text not null,
+  "chunkIndex" int,
+  embedding vector(1536),
+  metadata jsonb,
+  "createdAt" timestamptz default now()
+);
 
-  @@index([paperId])
-}
+-- Conversations
+create table "Conversation" (
+  id text primary key default gen_random_uuid()::text,
+  "createdAt" timestamptz default now(),
+  "updatedAt" timestamptz default now()
+);
 
-model Conversation {
-  id        String    @id @default(cuid())
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  messages  Message[]
-}
+create table "Message" (
+  id text primary key default gen_random_uuid()::text,
+  "conversationId" text references "Conversation"(id) on delete cascade,
+  role text not null, -- 'USER' | 'ASSISTANT'
+  content text not null,
+  citations jsonb,
+  "createdAt" timestamptz default now()
+);
 
-model Message {
-  id             String       @id @default(cuid())
-  conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  role           String       // 'user' | 'assistant'
-  content        String       @db.Text
-  citations      Json?
-  createdAt      DateTime     @default(now())
+-- Screening
+create table "ScreeningRequest" (
+  id text primary key default gen_random_uuid()::text,
+  title text not null,
+  abstract text not null,
+  keywords text[],
+  category text,
+  status text default 'PENDING',
+  "createdAt" timestamptz default now(),
+  "updatedAt" timestamptz default now()
+);
 
-  @@index([conversationId])
-}
+create table "ScreeningResult" (
+  id text primary key default gen_random_uuid()::text,
+  "requestId" text unique references "ScreeningRequest"(id) on delete cascade,
+  summary text not null,
+  recommendation text not null,
+  confidence float not null,
+  concerns text[],
+  suggestions text[],
+  "completedAt" timestamptz,
+  "createdAt" timestamptz default now()
+);
 
-model ScreeningRequest {
-  id         String            @id @default(cuid())
-  title      String
-  abstract   String            @db.Text
-  keywords   String[]
-  category   String?
-  status     String            @default("processing")
-  result     ScreeningResult?
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
-}
+create table "ScreeningCitation" (
+  id text primary key default gen_random_uuid()::text,
+  "resultId" text references "ScreeningResult"(id) on delete cascade,
+  "paperId" text references "Paper"(id) on delete cascade,
+  excerpt text not null,
+  relevance float not null,
+  "createdAt" timestamptz default now()
+);
 
-model ScreeningResult {
-  id             String           @id @default(cuid())
-  requestId      String           @unique
-  request        ScreeningRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  summary        String           @db.Text
-  recommendation String
-  confidence     Float
-  citations      Json
-  concerns       String[]
-  suggestions    String[]
-  completedAt    DateTime?
-}
+-- Scrape jobs
+create table "ScrapeJob" (
+  id text primary key default gen_random_uuid()::text,
+  source text not null,
+  status text default 'RUNNING',
+  "papersFound" int default 0,
+  "papersStored" int default 0,
+  error text,
+  "startedAt" timestamptz default now(),
+  "completedAt" timestamptz
+);
+```
+
+### Vector Search Function
+
+```sql
+create or replace function match_paper_chunks(
+  query_embedding vector(1536),
+  match_threshold float,
+  match_count int
+)
+returns table (
+  id text, paper_id text, title text, source text, url text, content text, similarity float
+)
+language sql stable as $$
+  select
+    pc.id, pc."paperId" as paper_id, p.title, p.source, p.url, pc.content,
+    1 - (pc.embedding <=> query_embedding) as similarity
+  from "PaperChunk" pc
+  join "Paper" p on p.id = pc."paperId"
+  where pc.embedding is not null
+    and 1 - (pc.embedding <=> query_embedding) > match_threshold
+  order by pc.embedding <=> query_embedding
+  limit match_count;
+$$;
 ```
 
 ## Scripts
@@ -445,10 +532,7 @@ npm run build        # Build for production
 npm run start        # Start production server
 
 # Database
-npm run db:migrate   # Run migrations
-npm run db:generate  # Generate Prisma client
 npm run db:seed      # Seed database
-npm run db:reset     # Reset database
 
 # Scraping
 npm run scrape       # Run scraper

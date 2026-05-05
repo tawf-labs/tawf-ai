@@ -1,23 +1,25 @@
 import { embedPaper } from '../src/embeddings/service.js';
-import { prisma } from '../src/db/client.js';
+import { supabase } from '../src/db/client.js';
 import { logger } from '../src/utils/logger.js';
 
 async function main() {
   logger.info('Starting embedding generation...');
 
-  const papers = await prisma.paper.findMany({
-    where: { chunks: { none: {} } },
-    take: 100,
-  });
+  const { data: papers, error } = await supabase
+    .from('Paper')
+    .select('id,title')
+    .not('id', 'in', supabase.from('PaperChunk').select('paperId'))
+    .limit(100);
+  if (error) throw error;
 
-  logger.info(`Found ${papers.length} papers without embeddings`);
+  logger.info(`Found ${papers?.length ?? 0} papers without embeddings`);
 
-  for (const paper of papers) {
+  for (const paper of papers ?? []) {
     try {
       const { chunksCreated } = await embedPaper(paper.id);
       logger.info(`Embedded "${paper.title}" → ${chunksCreated} chunks`);
-    } catch (error) {
-      logger.error(`Failed to embed paper ${paper.id}:`, error);
+    } catch (err) {
+      logger.error(`Failed to embed paper ${paper.id}:`, err);
     }
   }
 

@@ -5,7 +5,6 @@ import { registerRoutes } from './routes/index.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
-import { prisma } from './db/client.js';
 
 /**
  * Tawf-AI Application Entry Point
@@ -33,6 +32,10 @@ async function build() {
   // Register routes
   await registerRoutes(app);
 
+  // Register MCP server
+  const { registerMcpRoutes } = await import('./mcp/server.js');
+  await registerMcpRoutes(app);
+
   // Register error handler
   app.setErrorHandler(errorHandler);
 
@@ -43,7 +46,7 @@ async function build() {
 
   // Graceful shutdown
   app.addHook('onClose', async () => {
-    await prisma.$disconnect();
+    // cleanup if needed
   });
 
   return app;

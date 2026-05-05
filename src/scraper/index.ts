@@ -1,9 +1,10 @@
 import { Browser, chromium as playwrightChromium } from 'playwright';
 import { paperService } from '../services/paper.service.js';
+import { embedPaper } from '../embeddings/service.js';
 import { fatwaSources } from './fatwa.sources.js';
 import { paperScraper } from './paperScraper.js';
 import { logger } from '../utils/logger.js';
-import { prisma } from '../db/client.js';
+import { supabase } from '../db/client.js';
 import type { FatwaSource } from '../types/paper.js';
 
 export class Scraper {
@@ -65,42 +66,41 @@ export class Scraper {
   async scrapeSource(source: FatwaSource) {
     logger.info(`Scraping source: ${source.name}`);
 
-    const job = await prisma.scrapeJob.create({
-      data: {
-        source: source.name,
-        status: 'RUNNING',
-      },
-    });
+    const { data: job, error } = await supabase
+      .from('ScrapeJob')
+      .insert({ source: source.name, status: 'RUNNING' })
+      .select('id')
+      .single();
+    if (error) throw error;
 
     try {
       const papers = await paperScraper.scrape(this.browser!, source);
 
       let storedCount = 0;
       for (const paper of papers) {
-        await paperService.upsertPaper(paper);
+        const saved = await paperService.upsertPaper(paper);
+        try {
+          await embedPaper(saved.id);
+        } catch (err) {
+          logger.warn(`Embedding failed for paper ${saved.id}: ${err}`);
+        }
         storedCount++;
       }
 
-      await prisma.scrapeJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'COMPLETED',
-          papersFound: papers.length,
-          papersStored: storedCount,
-          completedAt: new Date(),
-        },
-      });
+      await supabase.from('ScrapeJob').update({
+        status: 'COMPLETED',
+        papersFound: papers.length,
+        papersStored: storedCount,
+        completedAt: new Date().toISOString(),
+      }).eq('id', job.id);
 
       logger.info(`Source ${source.name}: ${papers.length} papers found, ${storedCount} stored`);
     } catch (error) {
-      await prisma.scrapeJob.update({
-        where: { id: job.id },
-        data: {
-          status: 'FAILED',
-          error: String(error),
-          completedAt: new Date(),
-        },
-      });
+      await supabase.from('ScrapeJob').update({
+        status: 'FAILED',
+        error: String(error),
+        completedAt: new Date().toISOString(),
+      }).eq('id', job.id);
       throw error;
     }
   }
@@ -109,34 +109,23 @@ export class Scraper {
    * Get active scraping jobs
    */
   async getActiveJobs() {
-    return prisma.scrapeJob.findMany({
-      where: { status: 'RUNNING' },
-    });
+    const { data } = await supabase.from('ScrapeJob').select('*').eq('status', 'RUNNING');
+    return data ?? [];
   }
 
-  /**
-   * Get completed jobs count
-   */
   async getCompletedCount() {
-    return prisma.scrapeJob.count({
-      where: { status: 'COMPLETED' },
-    });
+    const { count } = await supabase.from('ScrapeJob').select('*', { count: 'exact', head: true }).eq('status', 'COMPLETED');
+    return count ?? 0;
   }
 
-  /**
-   * Get failed jobs count
-   */
   async getFailedCount() {
-    return prisma.scrapeJob.count({
-      where: { status: 'FAILED' },
-    });
+    const { count } = await supabase.from('ScrapeJob').select('*', { count: 'exact', head: true }).eq('status', 'FAILED');
+    return count ?? 0;
   }
 
-  /**
-   * Get total papers count
-   */
   async getTotalPapers() {
-    return prisma.paper.count();
+    const { count } = await supabase.from('Paper').select('*', { count: 'exact', head: true });
+    return count ?? 0;
   }
 }
 

@@ -25,6 +25,11 @@ export const config = {
     url: process.env.DATABASE_URL || '',
   },
 
+  supabase: {
+    url: process.env.SUPABASE_URL || '',
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  },
+
   thaura: {
     apiKey: process.env.THAURA_API_KEY || '',
     baseUrl: process.env.THAURA_BASE_URL || 'https://backend.thaura.ai/v1',

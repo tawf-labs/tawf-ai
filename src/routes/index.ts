@@ -4,7 +4,7 @@ import { papersRoutes } from './papers.routes.js';
 import { chatRoutes } from './chat.routes.js';
 import { screeningRoutes } from './screening.routes.js';
 import { scrapeRoutes } from './scrape.routes.js';
-import { prisma } from '../db/client.js';
+import { supabase } from '../db/client.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   // Health check (no auth)
@@ -20,9 +20,9 @@ export async function registerRoutes(app: FastifyInstance) {
   app.get('/api/v1/status', async () => {
     const { paperService } = await import('../services/paper.service.js');
 
-    const [stats, conversationsCount] = await Promise.all([
+    const [stats, { count: conversationsCount }] = await Promise.all([
       paperService.getStats(),
-      prisma.conversation.count(),
+      supabase.from('Conversation').select('*', { count: 'exact', head: true }),
     ]);
 
     return {
