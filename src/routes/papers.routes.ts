@@ -33,8 +33,8 @@ export async function papersRoutes(app: FastifyInstance) {
     }
 
     // Generate embedding for query
-    const { embeddingService } = await import('../embeddings/index.js');
-    const embedding = await embeddingService.generateEmbedding(result.data.query);
+    const { generateEmbedding } = await import('../embeddings/service.js');
+    const embedding = await generateEmbedding(result.data.query);
 
     const papers = await paperService.searchPapers(
       embedding,

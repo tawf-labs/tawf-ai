@@ -1,8 +1,4 @@
-import { AIService } from './ai.service.js';
-
-export const aiService = new AIService();
-
-export * from './ai.service.js';
-export * from './qwen.client.js';
-export * from './prompts.js';
-export * from './rag.js';
+export { aiService, AIService } from './ai.service.js';
+export type { ScreenProposalResult } from './ai.service.js';
+export { thauraModel, createThauraModel } from './thaura.client.js';
+export { CHAT_SYSTEM_PROMPT, SCREENING_SYSTEM_PROMPT } from './prompts.js';

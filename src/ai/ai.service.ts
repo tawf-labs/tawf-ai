@@ -1,26 +1,8 @@
-import { config } from '../config.js';
-import { qwenClient } from './qwen.client.js';
-import { ragService } from './rag.js';
-import { getSystemPrompt } from './prompts.js';
+import { HumanMessage, AIMessage } from '@langchain/core/messages';
+import { getChatGraph } from './chat.graph.js';
+import { getScreeningGraph, parseScreeningOutput } from './screening.graph.js';
 import type { Citation } from '../types/chat.js';
 import type { Message } from '@prisma/client';
-
-export interface GenerateResponseOptions {
-  message: string;
-  history: Message[];
-}
-
-export interface GenerateResponseResult {
-  response: string;
-  citations: Citation[];
-}
-
-export interface ScreenProposalOptions {
-  title: string;
-  abstract: string;
-  keywords: string[];
-  category?: string;
-}
 
 export interface ScreenProposalResult {
   summary: string;
@@ -28,152 +10,82 @@ export interface ScreenProposalResult {
   confidence: number;
   concerns: string[];
   suggestions: string[];
-  citations: Array<{
-    paperId: string;
-    excerpt: string;
-    relevance: number;
-  }>;
+  citations: Array<{ source: string; excerpt: string; relevance: number }>;
 }
 
 export class AIService {
-  /**
-   * Generate response using RAG
-   */
   async generateResponse(
     message: string,
     history: Message[]
-  ): Promise<GenerateResponseResult> {
-    // Retrieve relevant documents
-    const relevantDocs = await ragService.retrieve(message, config.rag.topKResults);
+  ): Promise<{ response: string; citations: Citation[] }> {
+    const graph = await getChatGraph();
 
-    // Build context from retrieved documents
-    const context = this.buildContext(relevantDocs);
+    // Build message list from history + new message
+    const messages = [
+      ...history.map((m) =>
+        m.role === 'USER' ? new HumanMessage(m.content) : new AIMessage(m.content)
+      ),
+      new HumanMessage(message),
+    ];
 
-    // Format conversation history
-    const conversationHistory = this.formatHistory(history);
+    const result = await graph.invoke({ messages });
 
-    // Generate response
-    const response = await qwenClient.generate({
-      prompt: message,
-      context,
-      history: conversationHistory,
-      systemPrompt: getSystemPrompt('chat'),
-    });
+    const lastAI = [...result.messages].reverse().find(AIMessage.isInstance);
+    const response = typeof lastAI?.content === 'string' ? lastAI.content : '';
 
-    // Extract citations
-    const citations: Citation[] = relevantDocs.map((doc: any) => ({
-      paperId: doc.paper.id,
-      title: doc.paper.title,
-      source: doc.paper.source,
-      url: doc.paper.url,
-      relevance: doc.similarity,
-      excerpt: doc.excerpt,
-    }));
+    // Extract citations from tool messages (Tavily + retriever results)
+    const citations = this.extractCitations(result.messages);
 
-    return {
-      response,
-      citations,
-    };
+    return { response, citations };
   }
 
-  /**
-   * Screen a proposal
-   */
-  async screenProposal(options: ScreenProposalOptions): Promise<ScreenProposalResult> {
-    const { title, abstract, keywords, category } = options;
+  async screenProposal(options: {
+    title: string;
+    abstract: string;
+    keywords: string[];
+    category?: string;
+  }): Promise<ScreenProposalResult> {
+    const graph = await getScreeningGraph();
 
-    // Build search query
-    const query = `${title} ${abstract} ${keywords.join(' ')}`;
+    const prompt = `Evaluate this proposal for Sharia compliance:
 
-    // Retrieve relevant documents
-    const relevantDocs = await ragService.retrieve(query, config.rag.topKResults);
+Title: ${options.title}
+Abstract: ${options.abstract}
+Keywords: ${options.keywords.join(', ')}${options.category ? `\nCategory: ${options.category}` : ''}`;
 
-    // Build context
-    const context = this.buildContext(relevantDocs);
+    const result = await graph.invoke({ messages: [new HumanMessage(prompt)] });
 
-    // Generate screening
-    const prompt = this.buildScreeningPrompt(title, abstract, keywords, category);
+    const lastAI = [...result.messages].reverse().find(AIMessage.isInstance);
+    const content = typeof lastAI?.content === 'string' ? lastAI.content : '';
 
-    const response = await qwenClient.generate({
-      prompt,
-      context,
-      systemPrompt: getSystemPrompt('screening'),
-    });
-
-    // Parse response (structured output)
-    return this.parseScreeningResponse(response, relevantDocs);
+    return parseScreeningOutput(content);
   }
 
-  /**
-   * Build context from retrieved documents
-   */
-  private buildContext(docs: any[]): string {
-    if (docs.length === 0) {
-      return 'No relevant scholarly sources found.';
+  private extractCitations(messages: any[]): Citation[] {
+    const citations: Citation[] = [];
+    for (const msg of messages) {
+      if (msg.name === 'search_fatwa_papers' || msg.name === 'tavily_search_results') {
+        try {
+          const results = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+          if (Array.isArray(results)) {
+            for (const r of results) {
+              citations.push({
+                paperId: r.id ?? '',
+                title: r.title ?? r.name ?? 'Source',
+                source: r.source ?? r.url ?? '',
+                url: r.url ?? '',
+                relevance: r.score ?? 0.8,
+                excerpt: r.pageContent ?? r.content ?? r.snippet ?? '',
+              });
+            }
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
     }
-
-    return docs
-      .map(
-        (doc, i) =>
-          `[Source ${i + 1}]: ${doc.paper.title}\n${doc.excerpt}\nSource: ${doc.paper.source}`
-      )
-      .join('\n\n');
-  }
-
-  /**
-   * Format conversation history
-   */
-  private formatHistory(history: Message[]): string {
-    return history
-      .map((msg) => `${msg.role === 'USER' ? 'User' : 'Assistant'}: ${msg.content}`)
-      .join('\n');
-  }
-
-  /**
-   * Build screening prompt
-   */
-  private buildScreeningPrompt(
-    title: string,
-    abstract: string,
-    keywords: string[],
-    category?: string
-  ): string {
-    return `Please evaluate the following proposal:
-
-Title: ${title}
-
-Abstract: ${abstract}
-
-Keywords: ${keywords.join(', ')}
-
-${category ? `Category: ${category}` : ''}
-
-Provide:
-1. A summary of your evaluation
-2. A recommendation (APPROVED, CONDITIONALLY_APPROVED, NEEDS_REVIEW, or REJECTED)
-3. Your confidence level (0-1)
-4. Any concerns
-5. Suggestions for improvement`;
-  }
-
-  /**
-   * Parse screening response
-   */
-  private parseScreeningResponse(response: string, docs: any[]): ScreenProposalResult {
-    // In production, use structured output or parse JSON response
-    // For now, return a basic structure
-
-    return {
-      summary: response.substring(0, 500),
-      recommendation: 'NEEDS_REVIEW',
-      confidence: 0.7,
-      concerns: [],
-      suggestions: [],
-      citations: docs.slice(0, 3).map((doc: any) => ({
-        paperId: doc.paper.id,
-        excerpt: doc.excerpt,
-        relevance: doc.similarity,
-      })),
-    };
+    return citations;
   }
 }
+
+export const aiService = new AIService();

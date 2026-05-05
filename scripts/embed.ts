@@ -1,40 +1,28 @@
-import { embeddingService } from '../src/embeddings/index.js';
+import { embedPaper } from '../src/embeddings/service.js';
 import { prisma } from '../src/db/client.js';
 import { logger } from '../src/utils/logger.js';
 
-/**
- * Generate embeddings for existing papers
- * Run with: npm run embed
- */
 async function main() {
   logger.info('Starting embedding generation...');
 
-  // Get all papers without embeddings
   const papers = await prisma.paper.findMany({
-    where: {
-      chunks: {
-        none: {},
-      },
-    },
-    take: 100, // Process in batches
+    where: { chunks: { none: {} } },
+    take: 100,
   });
 
   logger.info(`Found ${papers.length} papers without embeddings`);
 
   for (const paper of papers) {
     try {
-      await embeddingService.embedPaper(paper.id);
-      logger.info(`Generated embeddings for paper: ${paper.title}`);
+      const { chunksCreated } = await embedPaper(paper.id);
+      logger.info(`Embedded "${paper.title}" → ${chunksCreated} chunks`);
     } catch (error) {
       logger.error(`Failed to embed paper ${paper.id}:`, error);
     }
   }
 
-  logger.info('Embedding generation completed!');
+  logger.info('Done');
   process.exit(0);
 }
 
-main().catch((error) => {
-  logger.error(error);
-  process.exit(1);
-});
+main().catch((err) => { logger.error(err); process.exit(1); });

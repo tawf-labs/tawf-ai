@@ -2,65 +2,9 @@ import { config as loadEnv } from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-// Load environment variables
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 loadEnv({ path: join(__dirname, '../.env') });
-
-interface Config {
-  port: number;
-  host: string;
-  nodeEnv: string;
-  logLevel: string;
-  database: {
-    url: string;
-  };
-  ai: {
-    provider: 'ollama' | 'openai' | 'qwen';
-    ollama: {
-      baseUrl: string;
-      model: string;
-      embeddingModel: string;
-    };
-    openai: {
-      apiKey: string;
-      model: string;
-      embeddingModel: string;
-    };
-  };
-  embeddings: {
-    provider: 'ollama' | 'openai' | 'huggingface';
-    dimensions: number;
-    batchSize: number;
-  };
-  scraper: {
-    userAgent: string;
-    concurrency: number;
-    delayMs: number;
-    timeoutMs: number;
-    maxPages: number;
-  };
-  rag: {
-    chunkSize: number;
-    chunkOverlap: number;
-    topKResults: number;
-    minSimilarityThreshold: number;
-  };
-  api: {
-    keyEnabled: boolean;
-    key: string;
-    rateLimit: number;
-  };
-  cors: {
-    origin: string | string[];
-    credentials: boolean;
-  };
-  features: {
-    scraper: boolean;
-    screening: boolean;
-    chat: boolean;
-  };
-}
 
 function parseBoolean(value: string): boolean {
   return value.toLowerCase() === 'true';
@@ -71,11 +15,7 @@ function parseNumber(value: string | undefined, defaultValue: number): number {
   return isNaN(parsed) ? defaultValue : parsed;
 }
 
-function parseStringArray(value: string): string[] {
-  return value.split(',').map((s) => s.trim()).filter(Boolean);
-}
-
-export const config: Config = {
+export const config = {
   port: parseNumber(process.env.PORT, 3000),
   host: process.env.HOST || '0.0.0.0',
   nodeEnv: process.env.NODE_ENV || 'development',
@@ -85,23 +25,24 @@ export const config: Config = {
     url: process.env.DATABASE_URL || '',
   },
 
-  ai: {
-    provider: (process.env.AI_PROVIDER as 'ollama' | 'openai' | 'qwen') || 'ollama',
-    ollama: {
-      baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-      model: process.env.OLLAMA_MODEL || 'qwen2.5:14b',
-      embeddingModel: process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text',
-    },
-    openai: {
-      apiKey: process.env.OPENAI_API_KEY || '',
-      model: process.env.OPENAI_MODEL || 'gpt-4',
-      embeddingModel: process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small',
-    },
+  thaura: {
+    apiKey: process.env.THAURA_API_KEY || '',
+    baseUrl: process.env.THAURA_BASE_URL || 'https://backend.thaura.ai/v1',
+    model: 'thaura',
+    temperature: parseFloat(process.env.THAURA_TEMPERATURE || '0.7'),
+  },
+
+  tavily: {
+    apiKey: process.env.TAVILY_API_KEY || '',
+    maxResults: parseNumber(process.env.TAVILY_MAX_RESULTS, 5),
   },
 
   embeddings: {
-    provider: (process.env.EMBEDDING_PROVIDER as 'ollama' | 'openai' | 'huggingface') || 'ollama',
-    dimensions: parseNumber(process.env.EMBEDDING_DIMENSIONS, 768),
+    // Uses OpenAI-compatible embeddings; point at any compatible endpoint
+    apiKey: process.env.EMBEDDINGS_API_KEY || process.env.OPENAI_API_KEY || '',
+    baseUrl: process.env.EMBEDDINGS_BASE_URL || undefined,
+    model: process.env.EMBEDDINGS_MODEL || 'text-embedding-3-small',
+    dimensions: parseNumber(process.env.EMBEDDING_DIMENSIONS, 1536),
     batchSize: parseNumber(process.env.EMBEDDING_BATCH_SIZE, 10),
   },
 
@@ -117,7 +58,7 @@ export const config: Config = {
     chunkSize: parseNumber(process.env.CHUNK_SIZE, 1000),
     chunkOverlap: parseNumber(process.env.CHUNK_OVERLAP, 200),
     topKResults: parseNumber(process.env.TOP_K_RESULTS, 5),
-    minSimilarityThreshold: parseNumber(process.env.MIN_SIMILARITY_THRESHOLD, 0.7),
+    minSimilarityThreshold: parseFloat(process.env.MIN_SIMILARITY_THRESHOLD || '0.7'),
   },
 
   api: {
